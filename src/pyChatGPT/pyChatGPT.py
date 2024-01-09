@@ -19,6 +19,7 @@ import os
 cf_challenge_form = (By.ID, 'challenge-form')
 
 chatgpt_textbox = (By.TAG_NAME, 'textarea')
+chatgpt_beginning_streaming = (By.CLASS_NAME, 'prose')
 chatgpt_streaming = (By.CLASS_NAME, 'result-streaming')
 chatgpt_big_response = (By.XPATH, '//div[@class="flex-1 overflow-hidden"]//div[p]')
 chatgpt_small_response = (
@@ -421,6 +422,8 @@ class ChatGPT:
             textbox,
             message,
         )
+        textbox.send_keys(Keys.SPACE)
+        time.sleep(0.5)
         textbox.send_keys(Keys.ENTER)
 
         if stream:
@@ -430,6 +433,9 @@ class ChatGPT:
             return print()
 
         self.logger.debug('Waiting for completion...')
+        WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located(chatgpt_beginning_streaming)
+        )
         WebDriverWait(self.driver, 120).until_not(
             EC.presence_of_element_located(chatgpt_streaming)
         )
