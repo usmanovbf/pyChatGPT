@@ -224,7 +224,11 @@ class ChatGPT:
         self.__ensure_cf()
 
         self.logger.debug('Opening chat page...')
-        self.driver.get(f'{chatgpt_chat_url}/{self.__conversation_id}')
+        if self.__conversation_id:
+            self.driver.get(f'{chatgpt_chat_url}/{self.__conversation_id}')
+        else:
+            self.driver.get('https://chat.openai.com/?model=gpt-4')
+
         self.__check_blocking_elements()
 
         self.__is_active = True
