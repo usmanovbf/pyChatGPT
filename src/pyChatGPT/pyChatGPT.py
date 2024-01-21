@@ -1,24 +1,27 @@
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common import exceptions as SeleniumExceptions
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.common.by import By
-
-import undetected_chromedriver as uc
-from markdownify import markdownify
-from threading import Thread
-import platform
-import logging
-import weakref
 import json
-import time
-import re
+import logging
 import os
+import platform
+import re
+import time
+import undetected_chromedriver as uc
+import weakref
+from markdownify import markdownify
+from selenium.common import exceptions as SeleniumExceptions
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+from threading import Thread
+import pytz
+import datetime
+from datetime import datetime
 
 
 cf_challenge_form = (By.ID, 'challenge-form')
 
 chatgpt_textbox = (By.TAG_NAME, 'textarea')
+chatgpt_beginning_streaming = (By.CLASS_NAME, 'prose')
 chatgpt_streaming = (By.CLASS_NAME, 'result-streaming')
 chatgpt_big_response = (By.XPATH, '//div[@class="flex-1 overflow-hidden"]//div[p]')
 chatgpt_small_response = (
@@ -26,6 +29,7 @@ chatgpt_small_response = (
     '//div[starts-with(@class, "markdown prose w-full break-words")]',
 )
 chatgpt_alert = (By.XPATH, '//div[@role="alert"]')
+chatgpt_limit = (By.XPATH, "//span[contains(text(),'reached the current usage cap')]")
 chatgpt_intro = (By.ID, 'headlessui-portal-root')
 chatgpt_login_btn = (By.XPATH, '//button[text()="Log in"]')
 chatgpt_login_h1 = (By.XPATH, '//h1[text()="Welcome back"]')
@@ -48,19 +52,19 @@ class ChatGPT:
     '''
 
     def __init__(
-        self,
-        session_token: str = None,
-        conversation_id: str = '',
-        auth_type: str = None,
-        email: str = None,
-        password: str = None,
-        login_cookies_path: str = '',
-        captcha_solver: str = 'pypasser',
-        solver_apikey: str = '',
-        proxy: str = None,
-        chrome_args: list = [],
-        moderation: bool = True,
-        verbose: bool = False,
+            self,
+            session_token: str = None,
+            conversation_id: str = '',
+            auth_type: str = None,
+            email: str = None,
+            password: str = None,
+            login_cookies_path: str = '',
+            captcha_solver: str = 'pypasser',
+            solver_apikey: str = '',
+            proxy: str = None,
+            chrome_args: list = [],
+            moderation: bool = True,
+            verbose: bool = False,
     ):
         '''
         Initialize the ChatGPT object\n
@@ -92,7 +96,7 @@ class ChatGPT:
         self.__moderation = moderation
 
         if not self.__session_token and (
-            not self.__email or not self.__password or not self.__auth_type
+                not self.__email or not self.__password or not self.__auth_type
         ):
             raise ValueError(
                 'Please provide either a session token or login credentials'
@@ -104,7 +108,7 @@ class ChatGPT:
         if self.__captcha_solver == '2captcha' and not self.__solver_apikey:
             raise ValueError('Please provide a 2captcha apikey')
         if self.__proxy and not re.findall(
-            r'(https?|socks(4|5)?):\/\/.+:\d{1,5}', self.__proxy
+                r'(https?|socks(4|5)?):\/\/.+:\d{1,5}', self.__proxy
         ):
             raise ValueError('Invalid proxy format')
         if self.__auth_type == 'openai' and self.__captcha_solver == 'pypasser':
@@ -223,7 +227,11 @@ class ChatGPT:
         self.__ensure_cf()
 
         self.logger.debug('Opening chat page...')
-        self.driver.get(f'{chatgpt_chat_url}/{self.__conversation_id}')
+        if self.__conversation_id:
+            self.driver.get(f'{chatgpt_chat_url}/{self.__conversation_id}')
+        else:
+            self.driver.get('https://chat.openai.com/?model=gpt-4')
+
         self.__check_blocking_elements()
 
         self.__is_active = True
@@ -261,7 +269,7 @@ class ChatGPT:
             response = self.driver.find_element(By.TAG_NAME, 'pre').text
         response = json.loads(response)
         if (not response) or (
-            'error' in response and response['error'] == 'RefreshAccessTokenError'
+                'error' in response and response['error'] == 'RefreshAccessTokenError'
         ):
             self.logger.debug('Authorization is invalid')
             if not self.__auth_type:
@@ -349,8 +357,8 @@ class ChatGPT:
         while self.__is_active:
             self.logger.debug('Updating session...')
             payload = (
-                '{"event":"session","data":{"trigger":"getSession"},"timestamp":%d}'
-                % int(time.time())
+                    '{"event":"session","data":{"trigger":"getSession"},"timestamp":%d}'
+                    % int(time.time())
             )
             try:
                 self.driver.execute_script(
@@ -393,7 +401,7 @@ class ChatGPT:
             response = self.driver.find_elements(*chatgpt_small_response)[-1]
             content = response.text
             if content != prev_content:
-                yield content[len(prev_content) :]
+                yield content[len(prev_content):]
                 prev_content = content
             if not result_streaming:
                 break
@@ -421,6 +429,8 @@ class ChatGPT:
             textbox,
             message,
         )
+        textbox.send_keys(Keys.SPACE)
+        time.sleep(0.5)
         textbox.send_keys(Keys.ENTER)
 
         if stream:
@@ -430,6 +440,23 @@ class ChatGPT:
             return print()
 
         self.logger.debug('Waiting for completion...')
+
+        try:
+            WebDriverWait(self.driver, 5).until(
+                EC.presence_of_element_located(chatgpt_limit)
+            )
+            limit_alert = self.driver.find_elements(*chatgpt_limit)
+            if limit_alert:
+                limit_alert_text = limit_alert[0].text
+                print(f'Limit found: {limit_alert_text}')
+                raise InterruptedError(self.extract_time_to_utc(limit_alert_text))
+        except SeleniumExceptions.TimeoutException:
+            print(f'No limit found, continuing...')
+
+        WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located(chatgpt_beginning_streaming)
+        )
+
         WebDriverWait(self.driver, 120).until_not(
             EC.presence_of_element_located(chatgpt_streaming)
         )
@@ -473,6 +500,29 @@ class ChatGPT:
         except SeleniumExceptions.NoSuchElementException:
             self.logger.debug('New chat button not found')
             self.driver.save_screenshot('reset_conversation_failed.png')
+
+    def extract_time_to_utc(self, text):
+        # Define the Israel time zone
+        israel_timezone = pytz.timezone('Israel')
+
+        # Use regular expressions to extract the time in the text
+        time_match = re.search(r'\d{1,2}:\d{2} [APap][Mm]', text)
+
+        if time_match:
+            # Extract the matched time string
+            time_str = time_match.group(0)
+
+            input_datetime = datetime.strptime(text, "%Y-%m-%d %H:%M:%S%z")
+
+            # Define the Israel time zone
+            israel_timezone = pytz.timezone("Israel")
+
+            # Convert the parsed datetime to UTC
+            utc_datetime = input_datetime.astimezone(pytz.utc)
+
+            return utc_datetime
+        else:
+            return None
 
     def clear_conversations(self) -> None:
         '''
